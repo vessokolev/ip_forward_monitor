@@ -1,9 +1,12 @@
-# Monitoring IPv4 and IPv6 Routed Traffic via /proc and /sys
+# Monitoring IPv4 and IPv6 Routed Traffic
 
-This tool provides **simple stateless monitoring** of IPv4 and IPv6 traffic routed through a Linux system. It does not use `iptables`/`ip6tables`, `nftables`, or any stateful measures - only `/proc` and `/sys` interfaces. The tool can monitor traffic in deltas (changes over time) and export all data in JSON format for easy integration with monitoring systems.
+This project provides two tools for monitoring IPv4 and IPv6 traffic routed through a Linux system:
 
-**Script:** `ip_forward_monitor.py`  
-**Version:** 1.4.2  
+1. **`ip_forward_monitor.py`** - Uses `/proc` and `/sys` interfaces (simple, no special privileges)
+2. **`monitor_ip_forward_bpf.py`** - Uses eBPF/bpftrace (advanced, requires root)
+
+Both tools provide **simple stateless monitoring** without using `iptables`/`ip6tables`, `nftables`, or any stateful measures. They can monitor traffic in deltas (changes over time) and export all data in JSON format for easy integration with monitoring systems.
+
 **Author:** Veselin Kolev <vlk@lcpe.uni-sofia.bg>,<vesso@ucc.uni-sofia.bg>  
 **License:** MIT  
 **Copyright:** (c) 2023-2025 Veselin Kolev
@@ -95,9 +98,15 @@ Shows if IPv6 forwarding is enabled (1) or disabled (0).
 
 3. **No per-flow information**: These interfaces provide aggregate statistics only, not per-connection or per-flow data.
 
-## Usage
+## Tools
 
-### Command-Line Options
+### 1. ip_forward_monitor.py - /proc and /sys Based Monitoring
+
+**Version:** 1.4.2  
+**Privileges:** None required (read-only access to /proc and /sys)  
+**Method:** Reads kernel SNMP counters from `/proc/net/snmp` and `/proc/net/snmp6`
+
+#### Command-Line Options
 
 Get help and see all available options:
 ```bash
@@ -111,7 +120,7 @@ python3 ip_forward_monitor.py --help
 
 **Note:** Options can be combined. For example, you can use `--json` and `--interval` together.
 
-### Python Script (Recommended)
+#### Usage Examples
 
 The Python script (`ip_forward_monitor.py`) supports both IPv4 and IPv6 monitoring with JSON or text output:
 
@@ -150,7 +159,87 @@ python3 ip_forward_monitor.py monitor --json --interval 10
 python3 ip_forward_monitor.py monitor --json --interval 10 > monitoring_output.json
 ```
 
-### JSON Output Format
+### 2. monitor_ip_forward_bpf.py - eBPF/bpftrace Based Monitoring
+
+**Privileges:** Root required (for eBPF/bpftrace)  
+**Method:** Uses eBPF/bpftrace to monitor kernel functions directly  
+**Dependencies:** Requires `bpftrace` to be installed
+
+#### Installation
+
+```bash
+# Install bpftrace
+dnf install bpftrace    # RHEL/CentOS/Fedora
+```
+
+#### Command-Line Options
+
+Get help and see all available options:
+```bash
+python3 monitor_ip_forward_bpf.py --help
+```
+
+**Available options:**
+- `--json`: Output in JSON format (can be combined with other options)
+- `--interval <seconds>`: Sampling interval in seconds (default: 10 for monitor, 1 for snapshot)
+- `monitor`: Command to run continuous monitoring (optional, for one-time snapshot omit this)
+
+**Note:** Options can be combined. For example, you can use `--json` and `--interval` together.
+
+#### Usage Examples
+
+**Show current statistics (one-time snapshot, text format):**
+```bash
+python3 monitor_ip_forward_bpf.py
+```
+
+**Show current statistics (one-time snapshot, JSON format):**
+```bash
+python3 monitor_ip_forward_bpf.py --json
+```
+
+**Show current statistics with custom interval:**
+```bash
+python3 monitor_ip_forward_bpf.py --json --interval 5
+```
+
+**Monitor traffic continuously (text format):**
+```bash
+python3 monitor_ip_forward_bpf.py monitor
+```
+
+**Monitor traffic continuously (JSON format):**
+```bash
+python3 monitor_ip_forward_bpf.py monitor --json
+```
+
+**Monitor with custom interval:**
+```bash
+python3 monitor_ip_forward_bpf.py monitor --interval 5
+```
+
+**Monitor with custom interval and JSON output:**
+```bash
+python3 monitor_ip_forward_bpf.py monitor --json --interval 10
+```
+
+#### Differences from ip_forward_monitor.py
+
+| Feature | ip_forward_monitor.py | monitor_ip_forward_bpf.py |
+|---------|----------------------|---------------------------|
+| **Privileges** | None required | Root required |
+| **Data Source** | `/proc`/`/sys` (kernel counters) | eBPF (kernel functions) |
+| **Counters from Boot** | Yes (reads existing counters) | No (counts from monitoring start) |
+| **Per-Interface Stats** | Yes (via nstat or estimation) | No (system-wide only) |
+| **Packet Types** | Forwarding stats only | Incoming, Forwarded, Outgoing |
+| **JSON Output** | Yes | Yes |
+| **Overhead** | Very low (file reads) | Low (kernel probes) |
+
+**Note:** `monitor_ip_forward_bpf.py` shows activity during the monitoring window (deltas), not cumulative totals from boot. It tracks three packet types: incoming, forwarded, and outgoing packets.
+
+## JSON Output Format
+
+### ip_forward_monitor.py JSON Output
 
 #### Current Statistics Snapshot
 
@@ -300,19 +389,50 @@ When running with `monitor`, the JSON output shows deltas and rates:
 - `interval_seconds`: Time elapsed since last sample (monitoring mode only)
 - `*_delta`: Change in value during the interval (monitoring mode only)
 - `*_rate`: Rate in packets/second (monitoring mode only, forwarding stats)
-- `*_total`: Cumulative total value
+- `*_total`: Cumulative total value (from boot)
 - `interfaces`: Per-interface statistics with separate IPv4, IPv6, and total counters
 
-### Bash Script
+### monitor_ip_forward_bpf.py JSON Output
 
-A simple bash script (`monitor_ipv6_traffic.sh`) is also provided for basic monitoring:
-
-```bash
-chmod +x monitor_ipv6_traffic.sh
-./monitor_ipv6_traffic.sh
+**One-time snapshot or continuous monitoring:**
+```json
+{
+  "timestamp": "2025-12-02T12:34:56.789000Z",
+  "interval_seconds": 5,
+  "note": "Activity during 5 second monitoring window",
+  "ipv4": {
+    "incoming": {
+      "packets_delta": 15000
+    },
+    "forwarded": {
+      "packets_delta": 12000
+    },
+    "outgoing": {
+      "packets_delta": 15000
+    }
+  },
+  "ipv6": {
+    "incoming": {
+      "packets_delta": 10000
+    },
+    "forwarded": {
+      "packets_delta": 8000
+    },
+    "outgoing": {
+      "packets_delta": 10000
+    }
+  }
+}
 ```
 
-**Note:** The bash script provides basic statistics only. For full features including JSON output, protocol separation, and continuous monitoring, use the Python script.
+**Key points:**
+- `timestamp`: ISO 8601 format in UTC
+- `interval_seconds`: Monitoring window duration
+- `packets_delta`: Activity during the monitoring window (not cumulative from boot)
+- `incoming`: Total packets received
+- `forwarded`: Packets being forwarded
+- `outgoing`: Total packets sent
+- **Note:** Values are deltas (activity during monitoring), not cumulative totals from boot
 
 ## Acknowledgments
 
@@ -340,7 +460,7 @@ If you need more detailed information:
    ```
    **Note:** The script uses `nstat` to get per-interface protocol separation when available. Install `iproute2` package to get `nstat`.
 
-4. **eBPF/XDP**: For more advanced monitoring (requires kernel support and tools like `bpftrace`)
+4. **eBPF/XDP**: For more advanced monitoring (see `monitor_ip_forward_bpf.py` in this project)
 
 ## Protocol Separation
 
